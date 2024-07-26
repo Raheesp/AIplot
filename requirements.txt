@@ -1,0 +1,8 @@
+streamlit
+plotly
+pandas
+nltk
+pyttsx3
+wikipedia-api
+SpeechRecognition
+pyaudio

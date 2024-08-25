@@ -2,82 +2,44 @@ import streamlit as st
 import plotly.express as px
 import pandas as pd
 import nltk
-import tempfile
 from pathlib import Path
-from langchain.document_loaders import DirectoryLoader
+import torch
+from langchain.document_loaders import PyPDFDirectoryLoader, DirectoryLoader
 from langchain.vectorstores import FAISS
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.llms import OpenAI
 from langchain.chains import ConversationalRetrievalChain
-from langchain.embeddings import HuggingFaceBgeEmbeddings
+from langchain.llms import LlamaCpp 
+from langchain.embeddings import HuggingFaceBgeEmbeddings  # Import this line
+from langchain.embeddings import HuggingFaceEmbeddings 
 from langchain.chat_models import ChatOpenAI
 from streamlit_option_menu import option_menu
 from threading import Thread, Event
 from utils import generate_insights, speak_insights, stop_event
+from langchain.memory import ConversationBufferMemory
+from langchain.document_loaders.csv_loader import CSVLoader
+import os
+import tempfile
+from streamlit_chat import message
+from langchain.llms import CTransformers
 
-TMP_DIR = Path(__file__).resolve().parent.parent.joinpath('data', 'tmp')
-LOCAL_VECTOR_STORE_DIR = Path(__file__).resolve().parent.joinpath('data', 'vector_store')
+DB_FAISS_PATH = "vectorstore/db_faiss"
 
-header = st.container()
 
-# Define RAG function
-def RAG(docs, query):
-    for source_docs in docs:
-        file_name = source_docs.name  # Assuming source_docs has a name attribute
-        suffix = Path(file_name).suffix.lower()  # Extract suffix and make it lowercase
-        with tempfile.NamedTemporaryFile(delete=True, dir=TMP_DIR.as_posix(), suffix=suffix, mode='wb') as temp_file:
-            temp_file.write(source_docs.read())
-            temp_file.flush()  # Ensure content is written to disk
-            
-            # Process the document based on its type
-            temp_file.seek(0)  # Go back to the beginning of the file to read it
-            if suffix == '.pdf':
-                process_pdf(temp_file)
-            elif suffix == '.xls':
-                process_excel(temp_file)
-            elif suffix == '.doc':
-                process_doc(temp_file)
-            else:
-                print(f"Unsupported file type: {suffix}")
-
-def process_pdf(temp_file):
-    print("Processing PDF...")
-
-def process_excel(temp_file):
-    print("Processing Excel...")
-
-def process_doc(temp_file):
-    print("Processing DOC...")
-
-    loader = DirectoryLoader(TMP_DIR.as_posix(), glob=f'**/*.{suffix}', showprogress=True) # type: ignore
-    documents = loader.load()
-
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
-    text = text_splitter.split_documents(documents)
-
-    DB_FAISS_PATH = 'vectorestore_lmstudio/faiss'
-    embeddings = HuggingFaceBgeEmbeddings(model_name='sentence_transformers/all-MiniLM-L6-v2',
-                                          model_kwargs={'device': 'gpu'})
-    db = FAISS.from_documents(text, embeddings)
-    db.save.local(DB_FAISS_PATH)
-
-    llm = ChatOpenAI(base_url="http://192.168.1.8:1234", api_key="lm_studio")
-
-    qa_chain = ConversationalRetrievalChain.from_llm(
-        llm,
-        db.as_retriever(search_kwargs={'k': 2}),
-        return_source_documents=True
+def load_llm():
+    # Load the locally downloaded model here
+    llm = CTransformers(
+        model = "llama-2-7b-chat.ggmlv3.q8_0.bin",
+        model_type="llama",
+        max_new_tokens = 512,
+        temperature = 0.5,
+        device = 'cuda'
     )
+    return llm
 
-    chat_history = []
-    result = qa_chain({'question': query, 'chat_history': chat_history}) # type: ignore
-    st.write(result['answer'])
-    chat_history.append((query, result['answer'])) # type: ignore
-
-# Define Streamlit UI function
 def streamlit_ui():
     with st.sidebar:
-        choice = option_menu('Navigation', ['Home', 'Data analysis', 'Chat with Documents'], default_index=0)
+        choice = option_menu('Navigation', ['Home', 'Data analysis', 'Chat with CSV'], default_index=0)
 
     if choice == 'Home':
         st.title("Hi, Welcome to AIplot \n Where you can Analyse Data and Also Communicate with the Document")
@@ -161,20 +123,64 @@ def streamlit_ui():
 
             nltk.download('vader_lexicon')
 
-    elif choice == 'Chat with Documents':
-        with header:
-            st.title("Chat with Documents")
-            st.write('Upload a Document that you want to Chat with!')
-            source_docs = st.file_uploader(label="Upload a Document", type=["exel", "pdf", "Doc"], accept_multiple_files=True)
-            if not source_docs:
-                st.warning("Please Upload a Document")
-            else:
-                query = st.chat_input()
-                RAG(source_docs, query)
+    elif choice == 'Chat with CSV':
+        st.title('Chat with CSV using Llama 🦙')
+        uploaded_file = st.sidebar.file_uploader("Upload Your Data",type = "csv")
 
-streamlit_ui()
+        if uploaded_file:
+            with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+                tmp_file.write(uploaded_file.getvalue())
+                tmp_file_path = tmp_file.name
+            loader = CSVLoader(file_path=tmp_file_path, encoding= "utf-8", csv_args ={
+                'delimiter': ','
+            })
+            data =loader.load()
+            st.json(data)
+            embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2",
+                                       model_kwargs={'device': 'cuda'})
+            db = FAISS.from_documents(data, embeddings)
+            db.save_local(DB_FAISS_PATH)
+            llm = load_llm()
+            chain = ConversationalRetrievalChain.from_llm(llm=llm, retriever=db.as_retriever())
 
+            def conversational_chat(query):
+                result = chain({"question": query, "chat_history" :st.session_state['history']})
+                st.session_state['history'].append({query, result["answer"]})
+                return result["answer"]
             
+            if 'history' not in st.session_state:
+                st.session_state['history'] = []
 
-    
-  
+            if 'generated' not in st.session_state:
+                st.session_state['generated'] = ["Hello, Ask me anything about "+ uploaded_file.name + "😃"]
+
+            if 'past' not in st.session_state:
+                st.session_state['past'] = ["Hey ! :👋🏻: "]
+
+            response_container = st.container()
+
+            container = st.container()
+
+            with container:
+                with st.form(key = "my_form", clear_on_submit=True):
+                    user_input = st.text_input("query", placeholder = "Talk To Your CSV Data here (:",
+                    key='input')
+                    sumbit_button = st.form_submit_button(label="chat")
+                
+                if sumbit_button and user_input:
+                    output = conversational_chat(user_input)
+
+                    st.session_state['past'].append(user_input)
+                    st.session_state['generated'].append(output)
+
+            if st.session_state['generated']:
+                with response_container:
+                    for i in range(len(st.session_state['generated'])):
+                        message(st.session_state['past'][i], is_user=True, key=str(i) + '_user',
+                        avatar_style = "big-smile")
+                        message(st.session_state['generated'][i], key=str(i), avatar_style = "thumbs")
+
+                    
+
+if __name__ == "__main__":
+    streamlit_ui()

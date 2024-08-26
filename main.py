@@ -3,14 +3,12 @@ import plotly.express as px
 import pandas as pd
 import nltk
 from pathlib import Path
-import torch
-from langchain.document_loaders import PyPDFDirectoryLoader, DirectoryLoader
 from langchain.vectorstores import FAISS
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.llms import OpenAI
 from langchain.chains import ConversationalRetrievalChain
 from langchain.llms import LlamaCpp 
-from langchain.embeddings import HuggingFaceBgeEmbeddings  # Import this line
+from langchain.embeddings import HuggingFaceBgeEmbeddings 
 from langchain.embeddings import HuggingFaceEmbeddings 
 from langchain.chat_models import ChatOpenAI
 from streamlit_option_menu import option_menu
@@ -32,8 +30,7 @@ def load_llm():
         model = "llama-2-7b-chat.ggmlv3.q8_0.bin",
         model_type="llama",
         max_new_tokens = 512,
-        temperature = 0.5,
-        device = 'cuda'
+        temperature = 0.5
     )
     return llm
 
@@ -137,14 +134,14 @@ def streamlit_ui():
             data =loader.load()
             st.json(data)
             embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2",
-                                       model_kwargs={'device': 'cuda'})
+                                       model_kwargs={'device': 'cpu'})
             db = FAISS.from_documents(data, embeddings)
             db.save_local(DB_FAISS_PATH)
             llm = load_llm()
             chain = ConversationalRetrievalChain.from_llm(llm=llm, retriever=db.as_retriever())
 
             def conversational_chat(query):
-                result = chain({"question": query, "chat_history" :st.session_state['history']})
+                result = chain.invoke({"question": query, "chat_history" :st.session_state['history']})
                 st.session_state['history'].append({query, result["answer"]})
                 return result["answer"]
             

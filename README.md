@@ -1,6 +1,8 @@
 # AIplot
 This project is a comprehensive data analysis dashboard built using Streamlit and Plotly, designed to handle various data types such as sales forecasting and market analysis. The dashboard features dynamic graph generation, including histograms, box plots, pie charts, heatmaps, scatter plots, bar charts, line plots, and area charts.
 
+TheBloke/Llama-2-7B-Chat-GGML
+
 # Data Analysis Dashboard with Voice Integration
 
 ## Overview
